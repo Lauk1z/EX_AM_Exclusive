@@ -19,7 +19,7 @@ BEGIN
       VALUE "FileVersion", "@PROJECT_VERSION@.0\0"
       VALUE "InternalName", "@AM_INTERNAL_NAME@\0"
       VALUE "OriginalFilename", "@AM_FILE_NAME@\0"
-      VALUE "ProductName", "AMExclusive\0"
+      VALUE "ProductName", "EX_AM_Exclusive\0"
       VALUE "ProductVersion", "@PROJECT_VERSION@.0\0"
       VALUE "LegalCopyright", "Copyright (c) AMExclusive contributors. MIT License.\0"
     END
@@ -30,7 +30,7 @@ BEGIN
       VALUE "FileVersion", "@PROJECT_VERSION@.0\0"
       VALUE "InternalName", "@AM_INTERNAL_NAME@\0"
       VALUE "OriginalFilename", "@AM_FILE_NAME@\0"
-      VALUE "ProductName", "AMExclusive\0"
+      VALUE "ProductName", "EX_AM_Exclusive\0"
       VALUE "ProductVersion", "@PROJECT_VERSION@.0\0"
       VALUE "LegalCopyright", "版权所有 (c) AMExclusive 贡献者。MIT 许可证。\0"
     END

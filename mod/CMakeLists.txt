@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.24)
-project(AMExclusive VERSION 0.1.0 LANGUAGES CXX RC)
+project(EX_AM_Exclusive VERSION 0.2.0 LANGUAGES CXX RC)
 
 if(NOT WIN32 OR NOT CMAKE_SIZEOF_VOID_P EQUAL 8)
   message(FATAL_ERROR "AMExclusive supports Windows x64 only")
@@ -17,6 +17,24 @@ target_compile_definitions(am_exclusive_drain_probe PRIVATE UNICODE _UNICODE WIN
 target_link_libraries(am_exclusive_drain_probe PRIVATE ole32 uuid avrt)
 
 include(FetchContent)
+include(CTest)
+if(BUILD_TESTING)
+  add_executable(am_exclusive_runtime_tests
+    tests/RuntimeTransitionTests.cpp tests/FakeWasapiSink.cpp
+    src/audio_v2/AudioCoreCoordinator.cpp src/audio_v2/AudioCoreRuntime.cpp
+    src/audio_v2/ResampledPcmSource.cpp src/audio_v2/AsioExclusiveSink.cpp)
+  target_include_directories(am_exclusive_runtime_tests PRIVATE
+    src "${CMAKE_CURRENT_SOURCE_DIR}/../third_party/rigtorp-SPSCQueue/include")
+  target_compile_definitions(am_exclusive_runtime_tests PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+  target_link_libraries(am_exclusive_runtime_tests PRIVATE ole32 uuid advapi32 user32)
+  add_test(NAME runtime_transitions COMMAND am_exclusive_runtime_tests)
+  add_executable(am_exclusive_asio_tests tests/AsioSinkTests.cpp src/audio_v2/AsioExclusiveSink.cpp)
+  target_include_directories(am_exclusive_asio_tests PRIVATE src)
+  target_compile_definitions(am_exclusive_asio_tests PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+  target_link_libraries(am_exclusive_asio_tests PRIVATE ole32 uuid advapi32 user32)
+  add_test(NAME asio_sink COMMAND am_exclusive_asio_tests)
+  set_tests_properties(asio_sink runtime_transitions PROPERTIES TIMEOUT 45)
+endif()
 FetchContent_Declare(
   minhook
   GIT_REPOSITORY https://github.com/TsudaKageyu/minhook.git
@@ -77,18 +95,19 @@ add_library(am_exclusive_hook SHARED
   src/audio_v2/AudioCoreRuntime.cpp
   src/audio_v2/NativeRenderGateProxy.cpp
   src/audio_v2/ResampledPcmSource.cpp
+  src/audio_v2/AsioExclusiveSink.cpp
   src/audio_v2/WasapiExclusiveSink.cpp)
 target_include_directories(am_exclusive_hook PRIVATE
   src "${CMAKE_CURRENT_SOURCE_DIR}/../third_party/rigtorp-SPSCQueue/include")
 target_compile_definitions(am_exclusive_hook PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
-target_link_libraries(am_exclusive_hook PRIVATE minhook ole32 uuid advapi32 avrt)
+target_link_libraries(am_exclusive_hook PRIVATE minhook ole32 uuid advapi32 avrt user32)
 set_target_properties(am_exclusive_hook PROPERTIES OUTPUT_NAME "am-exclusive-hook")
 
 add_library(am_exclusive_ui SHARED src/UiAdapter.cpp src/IpcTransport.cpp)
 add_dependencies(am_exclusive_ui generate_winui_projection)
 target_include_directories(am_exclusive_ui PRIVATE src "${WINRT_GENERATED_DIR}")
 target_compile_definitions(am_exclusive_ui PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
-target_link_libraries(am_exclusive_ui PRIVATE advapi32 ole32 runtimeobject windowsapp)
+target_link_libraries(am_exclusive_ui PRIVATE advapi32 ole32 uuid runtimeobject windowsapp)
 set_target_properties(am_exclusive_ui PROPERTIES OUTPUT_NAME "am-exclusive-ui")
 
 add_executable(am_exclusive_media_control src/MediaSessionControl.cpp)
@@ -98,7 +117,7 @@ target_link_libraries(am_exclusive_media_control PRIVATE ole32 runtimeobject win
 add_executable(am_exclusive_broker src/Broker.cpp src/IpcTransport.cpp)
 target_include_directories(am_exclusive_broker PRIVATE src)
 target_compile_definitions(am_exclusive_broker PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
-target_link_libraries(am_exclusive_broker PRIVATE advapi32 ole32 comctl32)
+target_link_libraries(am_exclusive_broker PRIVATE advapi32 ole32 uuid comctl32)
 set_target_properties(am_exclusive_broker PROPERTIES OUTPUT_NAME "am-exclusive-broker")
 add_custom_command(TARGET am_exclusive_broker POST_BUILD
   COMMAND ${CMAKE_COMMAND} -E copy_if_different
@@ -106,7 +125,7 @@ add_custom_command(TARGET am_exclusive_broker POST_BUILD
           $<TARGET_FILE_DIR:am_exclusive_broker>/am-exclusive.ini)
 
 if(MSVC)
-  target_compile_options(am_exclusive_hook PRIVATE /W4 /permissive- /EHsc /guard:cf /wd4324)
+  target_compile_options(am_exclusive_hook PRIVATE /W4 /permissive- /EHsc /guard:cf /wd4324 /utf-8)
   target_compile_options(am_exclusive_ui PRIVATE /W4 /permissive- /EHsc /guard:cf /utf-8)
   target_compile_options(am_exclusive_media_control PRIVATE /W4 /permissive- /EHsc /guard:cf)
   target_compile_options(am_exclusive_broker PRIVATE /W4 /permissive- /EHsc /guard:cf /utf-8)
@@ -122,7 +141,7 @@ endif()
 # files listed by Generate-SetupResources.ps1 can be embedded.
 find_program(POWERSHELL_EXECUTABLE powershell.exe REQUIRED)
 set(SETUP_RESOURCE_FILE
-    "${CMAKE_CURRENT_BINARY_DIR}/generated/setup/AMExclusive-Setup.rc")
+    "${CMAKE_CURRENT_BINARY_DIR}/generated/setup/EX_AM_Exclusive.rc")
 add_custom_command(
   OUTPUT "${SETUP_RESOURCE_FILE}"
   COMMAND "${POWERSHELL_EXECUTABLE}"
@@ -158,7 +177,7 @@ add_dependencies(am_exclusive_setup
   am_exclusive_ui)
 target_include_directories(am_exclusive_setup PRIVATE src)
 target_compile_definitions(am_exclusive_setup PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
-set_target_properties(am_exclusive_setup PROPERTIES OUTPUT_NAME "AMExclusive-Setup")
+set_target_properties(am_exclusive_setup PROPERTIES OUTPUT_NAME "EX_AM_Exclusive")
 if(MSVC)
   target_compile_options(am_exclusive_setup PRIVATE /W4 /permissive- /EHsc /guard:cf /utf-8)
   target_link_options(am_exclusive_setup PRIVATE /guard:cf)
@@ -190,4 +209,4 @@ am_add_version_info(am_exclusive_hook "am-exclusive-hook.dll" "AMExclusive audio
 am_add_version_info(am_exclusive_ui "am-exclusive-ui.dll" "AMExclusive user interface" "AMExclusive 用户界面" VFT_DLL)
 am_add_version_info(am_exclusive_media_control "am_exclusive_media_control.exe" "AMExclusive media session control" "AMExclusive 媒体会话控制" VFT_APP)
 am_add_version_info(am_exclusive_broker "am-exclusive-broker.exe" "AMExclusive Apple Music companion" "AMExclusive Apple Music 伴生程序" VFT_APP)
-am_add_version_info(am_exclusive_setup "AMExclusive-Setup.exe" "AMExclusive installer" "AMExclusive 安装程序" VFT_APP)
+am_add_version_info(am_exclusive_setup "EX_AM_Exclusive.exe" "EX_AM_Exclusive installer" "EX_AM_Exclusive 安装程序" VFT_APP)

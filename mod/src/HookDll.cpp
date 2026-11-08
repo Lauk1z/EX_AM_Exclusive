@@ -2040,8 +2040,8 @@ void AudioCoreRuntimeEventCallback(void*, const ammod::audio_v2::AudioCoreRuntim
                  << (static_cast<double>(pcm.sampleRate) / 1000.0) << L" kHz";
             return text.str();
         };
-        const auto displayFormat = converted
-            ? describe(sourceFormat) + L" -> " + describe(format) : describe(format);
+        const auto displayFormat = std::wstring(snapshot.asioOutput ? L"ASIO · " : L"WASAPI · ") +
+            (converted ? describe(sourceFormat) + L" -> " + describe(format) : describe(format));
         Log(L"audio core v2 output " + displayFormat +
             L" resampled=" + std::to_wstring(resampled) +
             L" depthReduced=" + std::to_wstring(depthReduced) +
@@ -3763,7 +3763,8 @@ DWORD WINAPI PipeClientLoop(void*) {
                 if (GetLastError() == ERROR_TIMEOUT) continue;
                 break;
             }
-            if (incoming.type == MessageType::HelloAck && incoming.minor < 2) {
+            if (incoming.type == MessageType::HelloAck &&
+                (incoming.major != ammod::ipc::kProtocolMajor || incoming.minor < ammod::ipc::kProtocolMinor)) {
                 Log(L"broker lacks scoped audio-event support; connection retired");
                 break;
             }
@@ -3781,6 +3782,7 @@ DWORD WINAPI PipeClientLoop(void*) {
                     ? incoming.hardwareBufferMs : 20u;
                 g_audioCoreRuntime.SetHardwareBufferMilliseconds(hardwareBufferMs);
                 g_audioCoreRuntime.SetAllowResampling(incoming.allowResampling != 0);
+                g_audioCoreRuntime.SetOutputDevice(incoming.selectedEndpointId);
                 g_ipcEnabled.store(enabled, std::memory_order_release);
                 if (!enabled) g_nativeP0Puller.DisableForUiOff();
                 g_audioCoreGate.SetUiEnabled(enabled);

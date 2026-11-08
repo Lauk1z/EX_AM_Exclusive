@@ -680,14 +680,14 @@ int RunOperation(Operation operation) {
 
 void PrintMenu() {
     if (UseChineseUi()) {
-        std::wcout << L"\nAMExclusive 安装器\n"
+        std::wcout << L"\nEX_AM_Exclusive 安装器\n"
                    << L"------------------\n"
                    << L"1. 安装/升级\n"
                    << L"2. 卸载\n"
                    << L"0. 退出\n"
                    << L"请选择: " << std::flush;
     } else {
-        std::wcout << L"\nAMExclusive Setup\n"
+        std::wcout << L"\nEX_AM_Exclusive Setup\n"
                    << L"-----------------\n"
                    << L"1. Install/Upgrade\n"
                    << L"2. Uninstall\n"
@@ -718,22 +718,22 @@ int RunMenu() {
 }
 
 void PrintHelp() {
-    std::wcout << L"AMExclusive-Setup.exe\n\n";
+    std::wcout << L"EX_AM_Exclusive.exe\n\n";
     if (UseChineseUi()) {
         std::wcout << L"用法:\n"
-                   << L"  AMExclusive-Setup.exe       显示菜单\n"
-                   << L"  AMExclusive-Setup.exe --install\n"
-                   << L"  AMExclusive-Setup.exe --uninstall\n"
-                   << L"  AMExclusive-Setup.exe --extract-test\n"
-                   << L"  AMExclusive-Setup.exe --help\n\n"
+                   << L"  EX_AM_Exclusive.exe       显示菜单\n"
+                   << L"  EX_AM_Exclusive.exe --install\n"
+                   << L"  EX_AM_Exclusive.exe --uninstall\n"
+                   << L"  EX_AM_Exclusive.exe --extract-test\n"
+                   << L"  EX_AM_Exclusive.exe --help\n\n"
                    << L"--extract-test 只验证嵌入资源并清理临时目录，不安装、不卸载，也不启动 Apple Music。\n";
     } else {
         std::wcout << L"Usage:\n"
-                   << L"  AMExclusive-Setup.exe       Show the menu\n"
-                   << L"  AMExclusive-Setup.exe --install\n"
-                   << L"  AMExclusive-Setup.exe --uninstall\n"
-                   << L"  AMExclusive-Setup.exe --extract-test\n"
-                   << L"  AMExclusive-Setup.exe --help\n\n"
+                   << L"  EX_AM_Exclusive.exe       Show the menu\n"
+                   << L"  EX_AM_Exclusive.exe --install\n"
+                   << L"  EX_AM_Exclusive.exe --uninstall\n"
+                   << L"  EX_AM_Exclusive.exe --extract-test\n"
+                   << L"  EX_AM_Exclusive.exe --help\n\n"
                    << L"--extract-test only verifies the embedded resources and removes its temporary files; it does not install, uninstall, or start Apple Music.\n";
     }
 }

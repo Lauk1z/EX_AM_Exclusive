@@ -6,7 +6,7 @@
 #include "PcmQueue.h"
 #include "QueuedPcmSource.h"
 #include "ResampledPcmSource.h"
-#include "WasapiExclusiveSink.h"
+#include "AudioOutputSink.h"
 
 #include <atomic>
 #include <cstddef>
@@ -91,7 +91,7 @@ public:
     }
     std::uint64_t MediaGeneration() const noexcept { return config_.mediaGeneration; }
     const AudioCoreCoordinatorStats Stats() const noexcept;
-    const WasapiExclusiveSink& Sink() const noexcept { return sink_; }
+    const AudioOutputSink& Sink() const noexcept { return sink_; }
     WasapiSinkState SinkState() const noexcept { return sink_.State(); }
     void SetSinkResumeBlocked(bool blocked) noexcept { sink_.SetResumeBlocked(blocked); }
     std::size_t BufferedBlocks() const noexcept { return queue_ ? queue_->Size() : 0; }
@@ -135,7 +135,7 @@ private:
     std::optional<QueuedPcmSource> source_;
     ResampledPcmSource resampledSource_;
     BitPerfectVerifier verifier_{};
-    WasapiExclusiveSink sink_{};
+    AudioOutputSink sink_{};
     HANDLE sourceReadyEvent_{};
     std::uint64_t nextSequence_{};
     std::atomic<std::uint64_t> capturedFrames_{};

@@ -2,6 +2,14 @@
 
 The public product build uses the following third-party components.
 
+## ASIO interoperability
+
+ASIO is a trademark of Steinberg Media Technologies GmbH. AMExclusive implements
+its own Windows x64 ASIO host and ABI declarations for interoperability with
+separately installed drivers. No Steinberg SDK implementation, sample driver,
+or vendor audio driver is linked or distributed with this build.
+Interface reference: https://www.steinberg.net/developers/
+
 ## MinHook v1.3.4
 
 Upstream: https://github.com/TsudaKageyu/minhook

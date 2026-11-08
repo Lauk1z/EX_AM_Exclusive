@@ -55,7 +55,7 @@ if ($LASTEXITCODE -ne 0) { throw "CMake configure failed: $LASTEXITCODE" }
 if ($LASTEXITCODE -ne 0) { throw "CMake build failed: $LASTEXITCODE" }
 
 $output = Join-Path $build $Configuration
-$setupPath = Join-Path $output 'AMExclusive-Setup.exe'
+$setupPath = Join-Path $output 'EX_AM_Exclusive.exe'
 if (-not (Test-Path -LiteralPath $setupPath -PathType Leaf)) {
     throw "Self-contained setup executable was not produced: $setupPath"
 }
@@ -65,7 +65,7 @@ if (Test-Path -LiteralPath $distributionDirectory) {
     Remove-Item -LiteralPath $distributionDirectory -Recurse -Force
 }
 New-Item -ItemType Directory -Path $distributionDirectory -Force | Out-Null
-$distributionSetup = Join-Path $distributionDirectory 'AMExclusive-Setup.exe'
+$distributionSetup = Join-Path $distributionDirectory 'EX_AM_Exclusive.exe'
 Copy-Item -LiteralPath $setupPath -Destination $distributionSetup -Force
 
 $productionFiles = @(
@@ -74,7 +74,7 @@ $productionFiles = @(
     'am-exclusive-hook.dll',
     'am-exclusive-ui.dll',
     'am-exclusive.ini',
-    'AMExclusive-Setup.exe'
+    'EX_AM_Exclusive.exe'
 )
 Get-ChildItem -LiteralPath $output |
     Where-Object { $_.Name -in $productionFiles } |

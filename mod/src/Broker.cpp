@@ -1,6 +1,7 @@
 #include "BoundedLog.h"
 #include "IpcProtocol.h"
 #include "IpcTransport.h"
+#include "OutputDevices.h"
 
 #include <windows.h>
 #include <appmodel.h>
@@ -75,6 +76,7 @@ struct Client {
 };
 
 std::mutex g_mutex;
+std::wstring g_selectedEndpointId;
 std::mutex g_logMutex;
 std::atomic<bool> g_shutdown{};
 std::atomic<std::uint64_t> g_lastErrorDialogSignature{};
@@ -193,8 +195,8 @@ void ShowErrorDialogAsync(ErrorCategory error, HRESULT result,
                              : L"The DAC does not support the current source format.";
             break;
         case ErrorCategory::ExclusiveFormatUnavailable:
-            reason = chinese ? L"尝试兼容格式转换后，仍未找到设备支持的 WASAPI 独占输出格式。"
-                             : L"No supported WASAPI exclusive format was found after sample-rate and bit-depth conversion.";
+            reason = chinese ? L"尝试兼容格式转换后，仍未找到所选输出后端支持的格式。"
+                             : L"No supported format was found for the selected output backend after conversion.";
             break;
         case ErrorCategory::FormatUnsupported:
             reason = chinese ? L"声卡驱动拒绝了当前独占格式。"
@@ -214,8 +216,8 @@ void ShowErrorDialogAsync(ErrorCategory error, HRESULT result,
                              : L"The playback device changed or is unavailable.";
             break;
         case ErrorCategory::EndpointUnavailable:
-            reason = chinese ? L"当前默认播放设备不可用。"
-                             : L"The current default playback device is unavailable.";
+            reason = chinese ? L"所选播放设备不可用。请连接设备或重新选择输出设备。"
+                             : L"The selected playback device is unavailable. Connect it or select another output device.";
             break;
         case ErrorCategory::AudioServiceUnavailable:
             reason = chinese ? L"Windows 音频服务当前不可用。"
@@ -235,8 +237,8 @@ void ShowErrorDialogAsync(ErrorCategory error, HRESULT result,
             break;
         case ErrorCategory::HookLoadFailed:
             reason = chinese
-                ? L"独占音频组件（am-exclusive-hook.dll）缺失或无法加载。请检查杀毒软件隔离区，再运行 AMExclusive-Setup.exe 修复安装。"
-                : L"The exclusive audio component (am-exclusive-hook.dll) is missing or could not be loaded. Check antivirus quarantine, then run AMExclusive-Setup.exe to repair the installation.";
+                ? L"独占音频组件（am-exclusive-hook.dll）缺失或无法加载。请检查杀毒软件隔离区，再运行 EX_AM_Exclusive.exe 修复安装。"
+                : L"The exclusive audio component (am-exclusive-hook.dll) is missing or could not be loaded. Check antivirus quarantine, then run EX_AM_Exclusive.exe to repair the installation.";
             break;
         case ErrorCategory::ProtocolVersionMismatch:
             reason = chinese
@@ -847,7 +849,7 @@ void HandleMessage(const Message& incoming, HANDLE source) {
             })) return;
         const auto intentToken = g_status.requestId;
         if (incoming.role == Role::Agent &&
-            (source != g_authoritativeAgentPipe || incoming.minor < 2 ||
+            (source != g_authoritativeAgentPipe || incoming.major != kProtocolMajor ||
              !IsEqualGUID(incoming.requestId, intentToken))) return;
         if (incoming.type == MessageType::SetEnabled) {
             if (incoming.role != Role::Ui && incoming.role != Role::Controller) return;
@@ -880,6 +882,45 @@ void HandleMessage(const Message& incoming, HANDLE source) {
                         std::to_wstring(incoming.hardwareBufferMs) + L" error=" +
                         std::to_wstring(GetLastError()));
                 }
+            }
+        } else if (incoming.type == MessageType::ShowAsioControlPanel &&
+                   (incoming.role == Role::Ui || incoming.role == Role::Controller)) {
+            ammod::asio::Selection selection;
+            if (g_status.enabledIntent || !ammod::asio::ParseSelection(incoming.selectedEndpointId, selection)) return;
+            const auto drivers = ammod::asio::EnumerateDrivers();
+            if (std::none_of(drivers.begin(), drivers.end(), [&](const auto& driver) {
+                    return driver.id == selection.base;
+                })) return;
+            wchar_t executable[MAX_PATH]{};
+            if (!GetModuleFileNameW(nullptr, executable, MAX_PATH)) return;
+            std::wstring command = L"\"" + std::wstring(executable) + L"\" --asio-panel \"" + selection.base + L"\"";
+            STARTUPINFOW startup{sizeof(startup)};
+            PROCESS_INFORMATION process{};
+            if (CreateProcessW(executable, command.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW,
+                               nullptr, nullptr, &startup, &process)) {
+                CloseHandle(process.hThread);
+                CloseHandle(process.hProcess);
+            }
+            return;
+        } else if (incoming.type == MessageType::SetOutputDevice &&
+                   (incoming.role == Role::Ui || incoming.role == Role::Controller)) {
+            const std::wstring selected = incoming.selectedEndpointId;
+            ammod::asio::Selection asioSelection;
+            if (ammod::asio::IsAsio(selected) && !ammod::asio::ParseSelection(selected, asioSelection)) return;
+            const auto base = ammod::asio::DeviceBase(selected);
+            std::vector<ammod::audio::OutputDevice> devices;
+            const bool available = selected.empty() ||
+                (SUCCEEDED(ammod::audio::EnumerateOutputDevices(devices)) &&
+                 std::any_of(devices.begin(), devices.end(), [&](const auto& device) {
+                     return device.id == base;
+                 }));
+            if (available && WritePrivateProfileStringW(L"mod", L"output_device",
+                    selected.c_str(), BrokerIniPath().c_str())) {
+                g_selectedEndpointId = selected;
+                ++g_status.generation;
+                Log(L"output device persisted id=" + selected);
+            } else {
+                Log(L"output device selection failed id=" + selected);
             }
         } else if (incoming.type == MessageType::SetAllowResampling &&
                    (incoming.role == Role::Ui || incoming.role == Role::Controller)) {
@@ -945,6 +986,7 @@ void HandleMessage(const Message& incoming, HANDLE source) {
                 g_status.enabledIntent ? L"exclusive" : L"probe", BrokerIniPath().c_str());
         }
         g_status.requestId = intentToken;
+        wcsncpy_s(g_status.selectedEndpointId, g_selectedEndpointId.c_str(), _TRUNCATE);
         if (incoming.type == MessageType::SetEnabled) CoCreateGuid(&g_status.requestId);
         if (!g_status.enabledIntent) {
             g_status.state = RuntimeState::Off;
@@ -999,7 +1041,7 @@ void ClientThread(HANDLE pipe) {
         CloseHandle(pipe);
         return;
     }
-    if (hello.role == Role::Agent && hello.minor < 2) {
+    if (hello.major != kProtocolMajor || hello.minor < kProtocolMinor) {
         ReportComponentFailure(ErrorCategory::ProtocolVersionMismatch,
                                HRESULT_FROM_WIN32(ERROR_REVISION_MISMATCH), true);
         DisconnectNamedPipe(pipe);
@@ -1048,8 +1090,16 @@ void ClientThread(HANDLE pipe) {
 
 } // namespace
 
-int wmain() {
+int wmain(int argc, wchar_t** argv) {
     using namespace ammod::ipc;
+    if (argc == 3 && std::wstring_view(argv[1]) == L"--asio-panel") {
+        const auto result = ammod::asio::ShowControlPanel(argv[2]);
+        if (FAILED(result)) MessageBoxW(nullptr,
+            UseChineseUi() ? L"无法打开 ASIO 控制面板。请关闭独占模式并确认驱动可用。"
+                           : L"Could not open the ASIO control panel. Turn off exclusive output and check the driver.",
+            L"AMExclusive", MB_OK | MB_ICONERROR);
+        return FAILED(result) ? 1 : 0;
+    }
     (void)SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
     const auto sid = CurrentUserSid();
     if (sid.empty()) return 2;
@@ -1066,6 +1116,9 @@ int wmain() {
     g_status.enabledIntent = _wcsicmp(savedMode, L"exclusive") == 0 ? 1 : 0;
     g_status.hardwareBufferMs = ReadHardwareBufferMs();
     g_status.allowResampling = ReadAllowResampling() ? 1 : 0;
+    GetPrivateProfileStringW(L"mod", L"output_device", L"", g_status.selectedEndpointId,
+        static_cast<DWORD>(std::size(g_status.selectedEndpointId)), BrokerIniPath().c_str());
+    g_selectedEndpointId = g_status.selectedEndpointId;
     g_status.state = g_status.enabledIntent ? RuntimeState::WaitingForStream : RuntimeState::Off;
     Log(L"companion started pid=" + std::to_wstring(GetCurrentProcessId()) +
         L" persistedIntent=" + std::to_wstring(g_status.enabledIntent) +

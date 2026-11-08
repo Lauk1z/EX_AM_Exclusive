@@ -11,8 +11,8 @@
 namespace ammod::ipc {
 
 inline constexpr std::uint32_t kMagic = 0x50494D41; // "AMIP" little-endian
-inline constexpr std::uint16_t kProtocolMajor = 2;
-inline constexpr std::uint16_t kProtocolMinor = 2;
+inline constexpr std::uint16_t kProtocolMajor = 3;
+inline constexpr std::uint16_t kProtocolMinor = 1;
 inline constexpr std::size_t kEndpointIdChars = 256;
 inline constexpr std::size_t kEndpointNameChars = 128;
 inline constexpr std::size_t kFormatChars = 160;
@@ -43,6 +43,8 @@ enum class MessageType : std::uint16_t {
     TransportIntent = 9,
     SetHardwareBuffer = 10,
     SetAllowResampling = 11,
+    SetOutputDevice = 12,
+    ShowAsioControlPanel = 13,
 };
 
 enum class RuntimeState : std::uint16_t {
@@ -115,17 +117,19 @@ struct Message {
     wchar_t endpointName[kEndpointNameChars]{};
     wchar_t format[kFormatChars]{};
     wchar_t detail[kDetailChars]{};
+    wchar_t selectedEndpointId[kEndpointIdChars]{};
 };
 #pragma pack(pop)
 
 static_assert(std::is_trivially_copyable_v<Message>);
-static_assert(sizeof(Message) == 1680, "Keep the protocol 2.x wire layout stable");
+static_assert(sizeof(Message) == 2192, "Keep the protocol 3.x wire layout stable");
 static_assert(sizeof(Message) < 4096);
 
 inline bool IsValid(const Message& message) noexcept {
     return message.magic == kMagic && message.major == kProtocolMajor &&
            message.bytes == sizeof(Message) && message.type != MessageType::Invalid &&
-           message.role != Role::Unknown;
+           message.role != Role::Unknown &&
+           message.selectedEndpointId[kEndpointIdChars - 1] == L'\0';
 }
 
 inline ErrorCategory CategorizeAudioError(HRESULT hr) noexcept {
@@ -139,6 +143,8 @@ inline ErrorCategory CategorizeAudioError(HRESULT hr) noexcept {
         return ErrorCategory::ExclusiveFormatUnavailable;
     case ammod::audio::kEndpointDrainTimeout: return ErrorCategory::EndpointDrainTimeout;
     case HRESULT_FROM_WIN32(ERROR_TIMEOUT): return ErrorCategory::Timeout;
+    case REGDB_E_CLASSNOTREG:
+    case HRESULT_FROM_WIN32(ERROR_DEVICE_NOT_CONNECTED): return ErrorCategory::EndpointUnavailable;
     case AUDCLNT_E_UNSUPPORTED_FORMAT: return ErrorCategory::FormatUnsupported;
     case AUDCLNT_E_EXCLUSIVE_MODE_NOT_ALLOWED: return ErrorCategory::ExclusiveNotAllowed;
     case AUDCLNT_E_DEVICE_IN_USE: return ErrorCategory::DeviceInUse;

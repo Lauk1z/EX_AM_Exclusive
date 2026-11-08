@@ -32,7 +32,7 @@ goto collect
 :inplace
 rem Running in place from the install directory would reproduce the original
 rem failure (the directory cannot be removed while it is this console's cwd).
-echo Unable to stage the uninstaller in "%TEMP%". Use Windows Settings ^> Apps ^> Installed apps ^> AMExclusive, or run AMExclusive-Setup.exe and choose 2.
+echo Unable to stage the uninstaller in "%TEMP%". Use Windows Settings ^> Apps ^> Installed apps ^> AMExclusive, or run EX_AM_Exclusive.exe and choose 2.
 pause
 exit /b 1
 

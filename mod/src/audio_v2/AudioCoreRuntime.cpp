@@ -256,6 +256,11 @@ void AudioCoreRuntime::OnTransportPlayPause(std::uint64_t revision) noexcept {
     Wake();
 }
 
+void AudioCoreRuntime::SetOutputDevice(const wchar_t* endpointId) noexcept {
+    ControlScope lock(*this);
+    selectedEndpointId_ = endpointId ? endpointId : L"";
+}
+
 void AudioCoreRuntime::OnTransportPlaybackUnavailable(std::uint64_t revision) noexcept {
     if (revision == 0) return;
     ControlScope lock(*this);
@@ -399,7 +404,8 @@ void AudioCoreRuntime::OnTransportSkip(std::uint64_t epoch) noexcept {
     }
     // Previous/Next retains its explicit cancellation contract.
     AdvanceEventEpochLocked();
-    RetireCaptureLocked(true);
+    RetireCompletedCaptureLocked(boundConverter_.load(std::memory_order_acquire));
+    TryBindPendingGraphLocked();
     seekFence_ = true;
     seekFenceReleaseTick_ = GetTickCount64() + 500;
     Wake();
@@ -410,8 +416,7 @@ bool AudioCoreRuntime::DirectSelectionPending() const noexcept {
     const auto generation = boundMediaGeneration_.load(std::memory_order_acquire);
     return epoch != 0 && generation != 0 &&
         directSelectionSkipEpoch_.load(std::memory_order_acquire) == epoch &&
-        directSelectionArmGeneration_.load(std::memory_order_acquire) == generation &&
-        GetTickCount64() <= directSelectionArmDeadlineTick_.load(std::memory_order_acquire);
+        directSelectionArmGeneration_.load(std::memory_order_acquire) == generation;
 }
 
 bool AudioCoreRuntime::RetireDirectSelectionLocked() noexcept {
@@ -648,6 +653,7 @@ bool AudioCoreRuntime::BeginEndOfStreamDrainLocked(void* converter,
 
 bool AudioCoreRuntime::OnLocalEndOfStream(void* converter) noexcept {
     if (!UiEnabled() || !converter) return false;
+    if (DirectSelectionPending()) return false;
 
     // Direct playlist activation is a double-press gesture. The first press
     // arms a short control-plane epoch; Apple can dispose the local converter
@@ -1538,6 +1544,7 @@ void AudioCoreRuntime::Emit(AudioCoreRuntimeEvent event, HRESULT result) noexcep
     snapshot.reducingBitDepth = coordinator_.IsReducingBitDepth();
     snapshot.sourceMappingExact = coordinator_.IsSourceMappingExact();
     snapshot.converting = coordinator_.IsConverting();
+    snapshot.asioOutput = coordinator_.Sink().IsAsio();
     if (event == AudioCoreRuntimeEvent::Telemetry) {
         snapshot.stats = Stats();
     } else if (event == AudioCoreRuntimeEvent::Faulted) {
@@ -1746,7 +1753,7 @@ void AudioCoreRuntime::TryBindGraphLocked() noexcept {
             PcmEncoding::SignedInteger, true,
             static_cast<std::uint16_t>(snapshot.registration.sourceBitDepth)};
     }
-    config.sink.endpointId = nativeEndpoint_;
+    config.sink.endpointId = selectedEndpointId_;
     config.sink.periodFrames = PeriodFrames(format.sampleRate);
     config.sink.alignmentRetries = 3;
     config.sink.lifecycleContext = callbacks_.context;

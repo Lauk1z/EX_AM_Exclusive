@@ -1,4 +1,4 @@
-name: Build Setup
+name: Build EX_AM_Exclusive
 
 on:
   workflow_dispatch:
@@ -26,13 +26,18 @@ jobs:
 
       - name: Verify embedded installer payload
         run: |
-          & "$env:RUNNER_TEMP/ame-build/dist/AMExclusive-Setup.exe" --extract-test
+          & "$env:RUNNER_TEMP/ame-build/dist/EX_AM_Exclusive.exe" --extract-test
           if ($LASTEXITCODE -ne 0) { throw "Setup extraction check failed: $LASTEXITCODE" }
+
+      - name: Run runtime and ASIO regressions
+        run: |
+          ctest --test-dir "$env:RUNNER_TEMP/ame-build" -C Release --output-on-failure
+          if ($LASTEXITCODE -ne 0) { throw "Regression tests failed: $LASTEXITCODE" }
 
       - name: Upload Setup
         uses: actions/upload-artifact@v4
         with:
-          name: AMExclusive-Setup-x64
-          path: ${{ runner.temp }}/ame-build/dist/AMExclusive-Setup.exe
+          name: EX_AM_Exclusive-x64
+          path: ${{ runner.temp }}/ame-build/dist/EX_AM_Exclusive.exe
           if-no-files-found: error
           retention-days: 14

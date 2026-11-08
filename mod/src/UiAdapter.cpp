@@ -3,6 +3,7 @@
 #include "IpcTransport.h"
 #include "UiRefreshState.h"
 #include "UiPlaybackState.h"
+#include "OutputDevices.h"
 
 #include <windows.h>
 
@@ -99,6 +100,7 @@ winrt::weak_ref<Controls::ToggleSwitch> g_toggle;
 winrt::weak_ref<Controls::TextBox> g_hardwareBufferBox;
 winrt::weak_ref<Controls::ToggleSwitch> g_resamplingToggle;
 winrt::weak_ref<Controls::Border> g_outputFormatCard;
+Controls::Border g_outputDeviceCard{nullptr};
 Microsoft::UI::Dispatching::DispatcherQueue g_dispatcher{nullptr};
 Microsoft::UI::Dispatching::DispatcherQueueTimer g_statusRefreshTimer{nullptr};
 WindowObserverRef g_settingsWindow;
@@ -171,8 +173,8 @@ std::wstring ErrorText(ErrorCategory category) {
             L"The DAC supports none of the bit-perfect depth combinations required by this source; playback was stopped and the audio load was cleared");
     case ErrorCategory::ExclusiveFormatUnavailable:
         return Localized(
-            L"尝试兼容格式转换后，仍未找到设备支持的 WASAPI 独占输出格式；已停止当前播放",
-            L"No supported WASAPI exclusive format was found after sample-rate and bit-depth conversion; playback was stopped");
+            L"尝试兼容格式转换后，仍未找到所选输出后端支持的格式；已停止当前播放",
+            L"No supported format was found for the selected output backend after conversion; playback was stopped");
     case ErrorCategory::FormatUnsupported:
         return Localized(
             L"Apple 当前共享渲染格式无法直接用于独占输出；这不代表设备不支持独占",
@@ -185,8 +187,8 @@ std::wstring ErrorText(ErrorCategory category) {
                          L"The current playback device is in use by another app");
     case ErrorCategory::DeviceChanged:
     case ErrorCategory::DeviceInvalidated:
-        return Localized(L"默认播放设备已变化或不可用",
-                         L"The default playback device changed or is unavailable");
+        return Localized(L"所选播放设备已变化或不可用",
+                         L"The selected playback device changed or is unavailable");
     case ErrorCategory::AudioServiceUnavailable:
         return Localized(L"Windows 音频服务当前不可用",
                          L"The Windows Audio service is currently unavailable");
@@ -677,8 +679,8 @@ void ApplyStatus(const Controls::ToggleSwitch& toggle) {
                status.state == RuntimeState::WaitingForStream) {
         presentation = Localized(L"已开启 · 等待播放", L"Enabled · Waiting for playback");
     } else if (status.enabledIntent) {
-        presentation = Localized(L"正在启用当前默认播放设备…",
-                                 L"Enabling the current default playback device…");
+        presentation = Localized(L"正在启用所选播放设备…",
+                                 L"Enabling the selected playback device…");
     } else {
         presentation = ErrorText(status.error);
     }
@@ -1146,7 +1148,7 @@ void RefreshUiWindow(const std::shared_ptr<UiWindowContext>& context) {
                             if (g_statusRefreshTimer) g_statusRefreshTimer.Stop();
                             g_statusRefreshTimer = nullptr;
                             g_toggle = {}; g_hardwareBufferBox = {};
-                            g_resamplingToggle = {}; g_outputFormatCard = {};
+                            g_resamplingToggle = {}; g_outputFormatCard = {}; g_outputDeviceCard = nullptr;
                             g_dispatcher = nullptr;
                             g_settingsWindow = {};
                         }
@@ -1171,7 +1173,7 @@ void RefreshUiWindow(const std::shared_ptr<UiWindowContext>& context) {
                 oldTimer = g_statusRefreshTimer;
                 g_statusRefreshTimer = nullptr;
                 g_toggle = {}; g_hardwareBufferBox = {};
-                g_resamplingToggle = {}; g_outputFormatCard = {};
+                g_resamplingToggle = {}; g_outputFormatCard = {}; g_outputDeviceCard = nullptr;
                 g_dispatcher = context->dispatcher;
             }
             g_settingsWindow = context->window;
@@ -1299,6 +1301,75 @@ void ScheduleUiDiscovery() {
     }
 }
 
+void ApplyOutputDeviceStatus(const Controls::Border& card) {
+    Controls::TextBlock saved{nullptr};
+    Controls::ComboBox selector{nullptr};
+    if (auto content = card.Child().try_as<Controls::StackPanel>()) {
+        for (auto child : content.Children()) {
+            if (auto text = child.try_as<Controls::TextBlock>();
+                text && text.Name() == L"AMExclusiveOutputDeviceSaved") saved = text;
+            if (auto control = child.try_as<Controls::ComboBox>()) selector = control;
+        }
+    }
+    if (!saved || !selector) return;
+    const auto snapshot = StatusSnapshot();
+    const std::wstring selected = snapshot.selectedEndpointId;
+    const auto base = ammod::asio::DeviceBase(selected);
+    std::wstring name = selected.empty()
+        ? Localized(L"跟随系统默认", L"Follow system default")
+        : Localized(L"设备不可用：", L"Device unavailable: ") + selected;
+    for (const auto& item : selector.Items()) {
+        auto entry = item.try_as<Controls::ComboBoxItem>();
+        if (entry && unbox_value<hstring>(entry.Tag()) == base) {
+            name = unbox_value<hstring>(entry.Content()).c_str();
+            break;
+        }
+    }
+    ammod::asio::Selection asioSelection;
+    if (ammod::asio::ParseSelection(selected, asioSelection)) {
+        name += Localized(L" · 输出通道 ", L" · Output channels ") +
+            std::to_wstring(asioSelection.left + 1) + L" / " + std::to_wstring(asioSelection.right + 1);
+    }
+    const auto presentation = g_connected.load()
+        ? Localized(L"已保存：", L"Saved: ") + name
+        : Localized(L"等待连接音频组件…", L"Waiting for the audio component...");
+    if (saved.Text() != presentation) {
+        saved.Text(presentation);
+        Log(L"output device status generation=" + std::to_wstring(snapshot.generation) +
+            L" selected=" + selected);
+    }
+}
+
+void RefreshOutputDevices(const Controls::ComboBox& selector) {
+    std::wstring selected = StatusSnapshot().selectedEndpointId;
+    if (auto current = selector.SelectedItem().try_as<Controls::ComboBoxItem>())
+        selected = unbox_value<hstring>(current.Tag()).c_str();
+    selected = ammod::asio::DeviceBase(selected);
+    std::vector<ammod::audio::OutputDevice> devices;
+    const HRESULT result = ammod::audio::EnumerateOutputDevices(devices);
+    selector.Items().Clear();
+    const auto append = [&](const std::wstring& id, const std::wstring& name, bool enabled) {
+        Controls::ComboBoxItem entry;
+        entry.Tag(box_value(id));
+        entry.Content(box_value(name));
+        entry.IsEnabled(enabled);
+        selector.Items().Append(entry);
+        if (id == selected) selector.SelectedItem(entry);
+    };
+    append(L"", Localized(L"WASAPI · 跟随系统默认", L"WASAPI · Follow system default"), true);
+    bool found = selected.empty();
+    for (const auto& device : devices) {
+        if (device.id.size() >= kEndpointIdChars) continue;
+        append(device.id, device.name, true);
+        found = found || device.id == selected;
+    }
+    if (!found) append(selected, Localized(L"设备不可用：", L"Device unavailable: ") + selected, false);
+    if (std::none_of(devices.begin(), devices.end(), [](const auto& device) { return ammod::asio::IsAsio(device.id); })) {
+        append(L"asio:unavailable", Localized(L"ASIO · 未检测到 64 位驱动", L"ASIO · No 64-bit driver installed"), false);
+    }
+    if (FAILED(result)) Log(L"output device enumeration failed hresult=" + std::to_wstring(result));
+}
+
 void RememberToggle(const Controls::ToggleSwitch& toggle) {
     std::lock_guard lock(g_uiTargetMutex);
     g_toggle = make_weak(toggle);
@@ -1317,6 +1388,7 @@ void RememberToggle(const Controls::ToggleSwitch& toggle) {
                 winrt::weak_ref<Controls::TextBox> hardwareBuffer;
                 winrt::weak_ref<Controls::ToggleSwitch> resampling;
                 winrt::weak_ref<Controls::Border> outputFormat;
+                Controls::Border outputDevice{nullptr};
                 {
                     std::lock_guard targetLock(g_uiTargetMutex);
                     if (!g_dispatcher || !g_dispatcher.HasThreadAccess()) return;
@@ -1324,11 +1396,13 @@ void RememberToggle(const Controls::ToggleSwitch& toggle) {
                     hardwareBuffer = g_hardwareBufferBox;
                     resampling = g_resamplingToggle;
                     outputFormat = g_outputFormatCard;
+                    outputDevice = g_outputDeviceCard;
                 }
                 if (auto control = target.get()) ApplyStatus(control);
                 if (auto input = hardwareBuffer.get()) ApplyHardwareBufferStatus(input);
                 if (auto control = resampling.get()) ApplyResamplingStatus(control);
                 if (auto card = outputFormat.get()) ApplyOutputFormatStatus(card);
+                if (outputDevice) ApplyOutputDeviceStatus(outputDevice);
             } catch (const winrt::hresult_error& error) {
                 // The Apply* helpers raise their suppress flags first and
                 // lower them last; a throw in between would leave user
@@ -1371,6 +1445,7 @@ void ScheduleStatusRefresh() {
     winrt::weak_ref<Controls::TextBox> hardwareBuffer;
     winrt::weak_ref<Controls::ToggleSwitch> resampling;
     winrt::weak_ref<Controls::Border> outputFormat;
+    Controls::Border outputDevice{nullptr};
     Microsoft::UI::Dispatching::DispatcherQueue dispatcher{nullptr};
     {
         std::lock_guard lock(g_uiTargetMutex);
@@ -1378,15 +1453,17 @@ void ScheduleStatusRefresh() {
         hardwareBuffer = g_hardwareBufferBox;
         resampling = g_resamplingToggle;
         outputFormat = g_outputFormatCard;
+        outputDevice = g_outputDeviceCard;
         dispatcher = g_dispatcher;
     }
     if (dispatcher) {
-        dispatcher.TryEnqueue([toggle, hardwareBuffer, resampling, outputFormat] {
+        dispatcher.TryEnqueue([toggle, hardwareBuffer, resampling, outputFormat, outputDevice] {
             try {
                 if (auto control = toggle.get()) ApplyStatus(control);
                 if (auto input = hardwareBuffer.get()) ApplyHardwareBufferStatus(input);
                 if (auto control = resampling.get()) ApplyResamplingStatus(control);
                 if (auto card = outputFormat.get()) ApplyOutputFormatStatus(card);
+                if (outputDevice) ApplyOutputDeviceStatus(outputDevice);
             } catch (const winrt::hresult_error& error) {
                 g_suppressToggle.store(false);
                 g_suppressResamplingToggle.store(false);
@@ -1739,6 +1816,150 @@ Controls::Border CreateOutputFormatCard(
     return formatCard;
 }
 
+Controls::Border CreateOutputDeviceCard(const Controls::Border& appearance,
+                                       const std::vector<Controls::TextBlock>& nativeText) {
+    Controls::TextBlock title;
+    title.Text(Localized(L"独占输出设备", L"Exclusive output device"));
+    Controls::TextBlock description;
+    description.Text(Localized(
+        L"选择 WASAPI 设备或 ASIO 驱动后点击确定，下次打开歌曲时生效。ASIO 需要安装厂商的 64 位驱动；设备是否允许其他应用同时使用由驱动决定。展开列表可刷新设备。",
+        L"Select a WASAPI device or ASIO driver and apply for the next song. ASIO requires a 64-bit driver; access by other apps depends on that driver. Open the list to refresh devices."));
+    description.TextWrapping(Xaml::TextWrapping::Wrap);
+    Controls::TextBlock saved;
+    saved.Name(L"AMExclusiveOutputDeviceSaved");
+    saved.TextWrapping(Xaml::TextWrapping::Wrap);
+    if (!nativeText.empty()) title.Style(nativeText[0].Style());
+    if (nativeText.size() > 1) {
+        description.Style(nativeText[1].Style());
+        saved.Style(nativeText[1].Style());
+    }
+    Controls::ComboBox selector;
+    selector.Name(L"AMExclusiveOutputDeviceSelector");
+    selector.HorizontalAlignment(Xaml::HorizontalAlignment::Stretch);
+    Automation::AutomationProperties::SetName(selector, title.Text());
+    RefreshOutputDevices(selector);
+    selector.DropDownOpened([](auto&& sender, auto&&) {
+        try { RefreshOutputDevices(sender.template as<Controls::ComboBox>()); }
+        catch (...) { Log(L"output device refresh failed"); }
+    });
+    Controls::TextBox leftChannel;
+    leftChannel.Name(L"AMExclusiveAsioLeftChannel");
+    leftChannel.Header(box_value(Localized(L"ASIO 左声道（从 1 开始）", L"ASIO left channel (from 1)")));
+    leftChannel.Width(210);
+    leftChannel.MaxLength(4);
+    Controls::TextBox rightChannel;
+    rightChannel.Name(L"AMExclusiveAsioRightChannel");
+    rightChannel.Header(box_value(Localized(L"ASIO 右声道（从 1 开始）", L"ASIO right channel (from 1)")));
+    rightChannel.Width(210);
+    rightChannel.MaxLength(4);
+    ammod::asio::Selection initialAsio;
+    (void)ammod::asio::ParseSelection(StatusSnapshot().selectedEndpointId, initialAsio);
+    leftChannel.Text(std::to_wstring(initialAsio.left + 1));
+    rightChannel.Text(std::to_wstring(initialAsio.right + 1));
+    Controls::Button panel;
+    panel.Content(box_value(Localized(L"打开 ASIO 控制面板", L"Open ASIO control panel")));
+    panel.Click([weakSelector = make_weak(selector)](auto&&, auto&&) {
+        try {
+            const auto control = weakSelector.get();
+            if (!control) return;
+            const auto entry = control.SelectedItem().try_as<Controls::ComboBoxItem>();
+            if (!entry || !entry.IsEnabled()) return;
+            if (StatusSnapshot().enabledIntent) {
+                MessageBoxW(nullptr, Localized(L"请先关闭独占模式，再打开驱动控制面板。",
+                    L"Turn off exclusive mode before opening the driver control panel.").c_str(), L"AMExclusive", MB_OK);
+                return;
+            }
+            auto message = NewMessage(MessageType::ShowAsioControlPanel, Role::Ui);
+            const auto id = unbox_value<hstring>(entry.Tag());
+            wcsncpy_s(message.selectedEndpointId, id.c_str(), _TRUNCATE);
+            (void)TrySendConnectedMessage(message);
+        } catch (...) { Log(L"ASIO control panel request failed"); }
+    });
+    Controls::StackPanel asioOptions;
+    asioOptions.Spacing(8);
+    asioOptions.Children().Append(leftChannel);
+    asioOptions.Children().Append(rightChannel);
+    asioOptions.Children().Append(panel);
+    asioOptions.Visibility(ammod::asio::IsAsio(StatusSnapshot().selectedEndpointId)
+        ? Xaml::Visibility::Visible : Xaml::Visibility::Collapsed);
+    selector.SelectionChanged([asioOptions](auto&& sender, auto&&) {
+        try {
+            const auto control = sender.template as<Controls::ComboBox>();
+            const auto entry = control.SelectedItem().try_as<Controls::ComboBoxItem>();
+            const bool asio = entry && entry.IsEnabled() &&
+                ammod::asio::IsAsio(unbox_value<hstring>(entry.Tag()).c_str());
+            asioOptions.Visibility(asio ? Xaml::Visibility::Visible : Xaml::Visibility::Collapsed);
+        } catch (...) { Log(L"ASIO options refresh failed"); }
+    });
+    Controls::Button apply;
+    apply.Content(box_value(Localized(L"确定", L"Apply")));
+    apply.Click([weakSelector = make_weak(selector), weakSaved = make_weak(saved),
+                 leftChannel, rightChannel](auto&&, auto&&) {
+        try {
+            auto control = weakSelector.get();
+            auto status = weakSaved.get();
+            if (!control || !status) return;
+            auto entry = control.SelectedItem().try_as<Controls::ComboBoxItem>();
+            if (!entry || !entry.IsEnabled()) return;
+            auto message = NewMessage(MessageType::SetOutputDevice, Role::Ui);
+            message.uiPid = GetCurrentProcessId();
+            std::wstring id = unbox_value<hstring>(entry.Tag()).c_str();
+            if (ammod::asio::IsAsio(id)) {
+                const auto parseChannel = [](const hstring& text) -> long {
+                    if (text.empty() || text.size() > 4) return -1;
+                    long value{};
+                    for (const auto digit : text) {
+                        if (digit < L'0' || digit > L'9') return -1;
+                        value = value * 10 + digit - L'0';
+                    }
+                    return value >= 1 && value <= 4096 ? value - 1 : -1;
+                };
+                const auto left = parseChannel(leftChannel.Text());
+                const auto right = parseChannel(rightChannel.Text());
+                if (left < 0 || right < 0 || left == right) {
+                    MessageBoxW(nullptr, Localized(L"左右通道须为 1–4096 之间的不同整数，且必须是驱动实际提供的输出通道。",
+                        L"Use different channel numbers from 1 to 4096, within the driver's available outputs.").c_str(),
+                        L"AMExclusive", MB_OK | MB_ICONERROR);
+                    return;
+                }
+                id += L"/" + std::to_wstring(left) + L"/" + std::to_wstring(right);
+            }
+            wcsncpy_s(message.selectedEndpointId, id.c_str(), _TRUNCATE);
+            if (!TrySendConnectedMessage(message)) {
+                status.Text(Localized(L"保存失败，请连接后重试。", L"Could not save. Reconnect and try again."));
+            }
+        } catch (...) { Log(L"output device apply failed"); }
+    });
+    Controls::StackPanel content;
+    content.Spacing(8);
+    content.Children().Append(title);
+    content.Children().Append(description);
+    content.Children().Append(selector);
+    content.Children().Append(asioOptions);
+    content.Children().Append(apply);
+    content.Children().Append(saved);
+    auto card = CreateSettingsCard(appearance, L"AMExclusiveOutputDeviceCard", content);
+    card.Loaded([](auto&& sender, auto&&) {
+        try {
+            auto loaded = sender.template as<Controls::Border>();
+            {
+                std::lock_guard lock(g_uiTargetMutex);
+                g_outputDeviceCard = loaded;
+            }
+            ApplyOutputDeviceStatus(loaded);
+        } catch (...) { Log(L"output device card load failed"); }
+    });
+    card.Unloaded([](auto&& sender, auto&&) {
+        try {
+            std::lock_guard lock(g_uiTargetMutex);
+            if (g_outputDeviceCard == sender.template as<Controls::Border>())
+                g_outputDeviceCard = nullptr;
+        } catch (...) { Log(L"output device card unload failed"); }
+    });
+    ApplyOutputDeviceStatus(card);
+    return card;
+}
+
 bool AttachOrRefreshToggle(const Xaml::DependencyObject& page) {
     try {
         if (!page || !page.DispatcherQueue().HasThreadAccess()) return false;
@@ -1768,7 +1989,14 @@ bool AttachOrRefreshToggle(const Xaml::DependencyObject& page) {
                 ApplyOutputFormatStatus(formatCard);
                 ++complete;
             }
-            return complete == 4;
+            if (auto deviceCard = FindByName(page, L"AMExclusiveOutputDeviceCard")
+                                      .try_as<Controls::Border>()) {
+                std::lock_guard lock(g_uiTargetMutex);
+                g_outputDeviceCard = deviceCard;
+                ApplyOutputDeviceStatus(deviceCard);
+                ++complete;
+            }
+            return complete == 5;
         }
 
         Controls::StackPanel target{nullptr};
@@ -1807,8 +2035,8 @@ bool AttachOrRefreshToggle(const Xaml::DependencyObject& page) {
             toggle, Localized(L"独占模式", L"Exclusive mode"));
         Automation::AutomationProperties::SetHelpText(
             toggle,
-            Localized(L"尝试在当前默认播放设备上启用 WASAPI 独占输出",
-                      L"Try to use WASAPI exclusive output on the current default playback device"));
+            Localized(L"在所选设备上启用 WASAPI 独占或 ASIO 直接输出",
+                      L"Use WASAPI exclusive or direct ASIO output on the selected device"));
         toggle.Toggled([](winrt::Windows::Foundation::IInspectable const& sender,
                           Xaml::RoutedEventArgs const&) {
           try {
@@ -1858,8 +2086,8 @@ bool AttachOrRefreshToggle(const Xaml::DependencyObject& page) {
         title.Text(Localized(L"独占模式", L"Exclusive mode"));
         Controls::TextBlock description;
         description.Text(Localized(
-            L"对当前默认播放设备使用 WASAPI 独占输出。",
-            L"Use WASAPI exclusive output on the current default playback device."));
+            L"使用所选 WASAPI 独占设备或 ASIO 驱动直接输出。",
+            L"Output directly through the selected WASAPI exclusive device or ASIO driver."));
         description.TextWrapping(Xaml::TextWrapping::Wrap);
         Controls::TextBlock statusText;
         statusText.Name(L"AMExclusiveModeStatus");
@@ -2016,8 +2244,8 @@ bool AttachOrRefreshToggle(const Xaml::DependencyObject& page) {
         bufferTitle.Text(Localized(L"硬件缓冲区", L"Hardware buffer"));
         Controls::TextBlock bufferDescription;
         bufferDescription.Text(Localized(
-            L"设置 WASAPI 独占输出的硬件缓冲时长（毫秒）。",
-            L"Set the WASAPI exclusive hardware buffer duration in milliseconds."));
+            L"设置目标硬件缓冲时长（毫秒）。ASIO 会选择驱动支持的最接近值；固定缓冲驱动使用其首选值。",
+            L"Target hardware buffer duration in milliseconds. ASIO uses the nearest supported size, or the driver's fixed preferred size."));
         bufferDescription.TextWrapping(Xaml::TextWrapping::Wrap);
         if (!nativeText.empty()) bufferTitle.Style(nativeText[0].Style());
         if (nativeText.size() > 1) bufferDescription.Style(nativeText[1].Style());
@@ -2092,9 +2320,10 @@ bool AttachOrRefreshToggle(const Xaml::DependencyObject& page) {
         bufferCard.MaxWidth(card.MaxWidth());
         auto [resamplingCard, resamplingToggle] = CreateResamplingCard(card, toggle, nativeText);
         auto formatCard = CreateOutputFormatCard(card, nativeText);
+        auto deviceCard = CreateOutputDeviceCard(card, nativeText);
         // Construct all cards before publishing any. If an append fails, only
         // remove this batch, so the next readiness callback can retry cleanly.
-        const Xaml::UIElement cards[]{card, bufferCard, resamplingCard, formatCard};
+        const Xaml::UIElement cards[]{card, deviceCard, bufferCard, resamplingCard, formatCard};
         auto children = target.Children();
         try {
             for (const auto& item : cards) children.Append(item);
@@ -2108,6 +2337,10 @@ bool AttachOrRefreshToggle(const Xaml::DependencyObject& page) {
 
         RememberToggle(toggle);
         RememberHardwareBufferBox(bufferInput);
+        {
+            std::lock_guard lock(g_uiTargetMutex);
+            g_outputDeviceCard = deviceCard;
+        }
         RememberResamplingToggle(resamplingToggle);
         RememberOutputFormatCard(formatCard);
         ApplyStatus(toggle);

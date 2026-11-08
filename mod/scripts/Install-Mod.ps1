@@ -173,6 +173,7 @@ Write-ProgressMilestone 32 'stop_runtime'
 $preservedMode = $null
 $preservedPeriod100ns = $null
 $preservedAllowResampling = $null
+$preservedOutputDevice = $null
 foreach ($existingIni in @(
     (Join-Path $install 'am-exclusive.ini')
 )) {
@@ -183,6 +184,10 @@ foreach ($existingIni in @(
         }
         if ($line -match '^\s*allow_resampling\s*=\s*([01])\s*$') {
             $preservedAllowResampling = [int]$Matches[1]
+        }
+        if ($line -match '^\s*output_device\s*=\s*([^\r\n]*)$') {
+            $candidateDevice = $Matches[1].Trim()
+            if ($candidateDevice.Length -lt 256) { $preservedOutputDevice = $candidateDevice }
         }
         if ($line -match '^\s*period_100ns\s*=\s*(\d+)\s*$') {
             [uint64]$candidatePeriod = 0
@@ -242,6 +247,15 @@ if ($null -ne $preservedAllowResampling) {
     [IO.File]::WriteAllText($iniPath, $iniText, $utf8NoBom)
 }
 # Only this file is intentionally transformed to preserve the user's settings.
+if ($null -ne $preservedOutputDevice) {
+    $iniPath = Join-Path $install 'am-exclusive.ini'
+    $iniText = [IO.File]::ReadAllText($iniPath)
+    $iniText = [Text.RegularExpressions.Regex]::Replace(
+        $iniText, '(?m)^\s*output_device\s*=[^\r\n]*',
+        [Text.RegularExpressions.MatchEvaluator]{ param($match) "output_device=$preservedOutputDevice" })
+    $utf8NoBom = New-Object Text.UTF8Encoding($false)
+    [IO.File]::WriteAllText($iniPath, $iniText, $utf8NoBom)
+}
 $expectedHashes['am-exclusive.ini'] = Get-Sha256Hex (Join-Path $install 'am-exclusive.ini')
 foreach ($script in $installerScripts) {
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot $script) -Destination (Join-Path $install $script) -Force
